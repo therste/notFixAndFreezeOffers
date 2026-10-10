@@ -23,7 +23,7 @@ EMOJI_GRAM = "5267445215773367585"
 EMOJI_DECLINE_EN = "5774077015388852135"
 EMOJI_ACCEPT = "5774022692642492953"
 
-BUYER_USERNAME = "faceunc"
+BUYER_USERNAME = "godmalte"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
